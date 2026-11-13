@@ -17,6 +17,7 @@ export interface HudSnapshot {
   kills: number;
   knifeReady: boolean;
   knifeChargeProgress: number; // 0..1
+  crosshairLocked: boolean;
   altitude: number;
   elapsedSeconds: number;
   damageFlash: number; // 0..1

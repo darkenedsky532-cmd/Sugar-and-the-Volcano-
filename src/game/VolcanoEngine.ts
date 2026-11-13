@@ -143,7 +143,9 @@ export class VolcanoEngine {
   private virtualJoyX = 0;
   private virtualJoyY = 0;
   private virtualJump = false;
+  private virtualFire = false;
   private virtualCamTurn = 0;
+  private crosshairLocked = false;
   private lastHudEmit = 0;
   private webglError: string | null = null;
 
@@ -545,8 +547,24 @@ export class VolcanoEngine {
     this.virtualJump = pressed;
   }
 
+  public setVirtualFire(pressed: boolean) {
+    this.virtualFire = pressed;
+    if (pressed) {
+      this.throwKnife();
+    }
+  }
+
   public setVirtualCameraTurn(dir: number) {
     this.virtualCamTurn = THREE.MathUtils.clamp(dir, -1, 1);
+  }
+
+  public rotateCameraBy(dx: number, dy: number) {
+    this.cameraYaw -= dx * 0.0062;
+    this.cameraPitch = THREE.MathUtils.clamp(
+      this.cameraPitch + dy * 0.0045,
+      -0.18,
+      0.95,
+    );
   }
 
   public triggerThrowKnife() {
@@ -661,44 +679,47 @@ export class VolcanoEngine {
       .clone()
       .add(new THREE.Vector3(0, 1.32, 0));
 
-    // Determine throw direction via pointer raycast + smart monster aim assist
+    // Determine throw direction via pointer raycast OR center TPS crosshair (0,0) + smart monster aim assist
     let aimPoint: THREE.Vector3 | null = null;
     if (clientX !== undefined && clientY !== undefined) {
       const rect = this.renderer.domElement.getBoundingClientRect();
       _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
       _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-      _raycaster.setFromCamera(_ndc, this.camera);
+    } else {
+      // Center TPS crosshair aim
+      _ndc.set(0, 0);
+    }
 
-      // First check if ray passes close to any monster (generous 3D aim assist!)
-      let bestDistToRay = 2.6;
-      for (const m of this.monsters) {
-        _vA.copy(m.position);
-        _vA.y += m.kind === 'stalker' ? 1.45 : m.kind === 'golem' ? 1.15 : 0.78;
-        const dRay = _raycaster.ray.distanceToPoint(_vA);
-        if (dRay < bestDistToRay) {
-          bestDistToRay = dRay;
-          aimPoint = _vA.clone();
-        }
+    _raycaster.setFromCamera(_ndc, this.camera);
+
+    // Check if center/cursor ray passes close to any monster in front of camera
+    let bestDistToRay = 2.4;
+    for (const m of this.monsters) {
+      _vA.copy(m.position);
+      _vA.y += m.kind === 'stalker' ? 1.45 : m.kind === 'golem' ? 1.15 : 0.78;
+      // Ensure monster is ahead of camera
+      _vB.copy(_vA).sub(this.camera.position);
+      if (_vB.dot(_raycaster.ray.direction) <= 1.2) continue;
+
+      const dRay = _raycaster.ray.distanceToPoint(_vA);
+      if (dRay < bestDistToRay) {
+        bestDistToRay = dRay;
+        aimPoint = _vA.clone();
       }
+    }
 
-      if (!aimPoint) {
+    if (!aimPoint) {
+      if (clientX !== undefined && clientY !== undefined) {
         _groundPlane.constant = -(this.playerPos.y + 1.0);
         const hit = new THREE.Vector3();
         if (_raycaster.ray.intersectPlane(_groundPlane, hit)) {
           aimPoint = hit;
         }
-      }
-    } else {
-      // Keyboard throw ('F'): auto-target nearest monster within front arc or forward direction
-      let bestScore = Infinity;
-      for (const m of this.monsters) {
-        const d = m.position.distanceTo(this.playerPos);
-        if (d < 22 && d < bestScore) {
-          bestScore = d;
-          aimPoint = m.position
-            .clone()
-            .add(new THREE.Vector3(0, m.kind === 'stalker' ? 1.45 : 0.95, 0));
-        }
+      } else {
+        // Throw straight through the center TPS crosshair at 24u range
+        aimPoint = _raycaster.ray.origin
+          .clone()
+          .addScaledVector(_raycaster.ray.direction, 24);
       }
     }
 
@@ -970,7 +991,7 @@ export class VolcanoEngine {
       this.girl.hairBack.rotation.x = moving ? 0.28 + Math.sin(runCycle * 2) * 0.08 : 0.06;
     }
 
-    // Infinite knife regeneration in her hand
+    // Infinite knife regeneration in her hand + hold-to-throw rapid fire
     if (this.knifeCooldown > 0) {
       this.knifeCooldown = Math.max(0, this.knifeCooldown - dt);
       if (this.knifeCooldown === 0 && !this.girl.heldKnife.visible) {
@@ -978,6 +999,9 @@ export class VolcanoEngine {
         this.girl.heldKnife.scale.setScalar(0.15);
         gameAudio.playKnifeReturn();
       }
+    }
+    if (this.virtualFire && this.knifeCooldown <= 0) {
+      this.throwKnife();
     }
     if (this.girl.heldKnife.visible && this.girl.heldKnife.scale.x < 1.15) {
       const nextScale = Math.min(1.15, this.girl.heldKnife.scale.x + dt * 7.5);
@@ -1240,16 +1264,23 @@ export class VolcanoEngine {
         Math.sin(orbitA) * 24,
       );
       this.camera.lookAt(0, 3.5, 0);
+      this.crosshairLocked = false;
       return;
     }
 
-    const camDist = this.phase === 'parachuting' ? 10.5 : 8.6;
-    const lookHeight = this.phase === 'parachuting' ? 1.4 : 1.55;
+    const isChute = this.phase === 'parachuting';
+    const camDist = isChute ? 9.5 : 6.4;
+    const lookHeight = isChute ? 1.5 : 1.68;
+    const shoulderOffset = isChute ? 0.35 : 0.92;
+
+    // Right vector relative to cameraYaw for over-the-shoulder TPS offset
+    const rightX = Math.cos(this.cameraYaw);
+    const rightZ = -Math.sin(this.cameraYaw);
 
     _vCamTarget.set(
-      this.playerPos.x,
+      this.playerPos.x + rightX * shoulderOffset,
       this.playerPos.y + lookHeight,
-      this.playerPos.z,
+      this.playerPos.z + rightZ * shoulderOffset,
     );
 
     const horizDist = Math.cos(this.cameraPitch) * camDist;
@@ -1261,9 +1292,25 @@ export class VolcanoEngine {
       _vCamTarget.z + Math.cos(this.cameraYaw) * horizDist,
     );
 
-    const dampFactor = 1 - Math.exp(-10 * dt);
+    const dampFactor = 1 - Math.exp(-12 * dt);
     this.camera.position.lerp(_vCamDesired, dampFactor);
     this.camera.lookAt(_vCamTarget);
+
+    // Check if center TPS crosshair is aimed near a monster
+    _ndc.set(0, 0);
+    _raycaster.setFromCamera(_ndc, this.camera);
+    let locked = false;
+    for (const m of this.monsters) {
+      _vA.copy(m.position);
+      _vA.y += m.kind === 'stalker' ? 1.45 : m.kind === 'golem' ? 1.15 : 0.78;
+      _vB.copy(_vA).sub(this.camera.position);
+      if (_vB.dot(_raycaster.ray.direction) <= 1.2) continue;
+      if (_raycaster.ray.distanceToPoint(_vA) < 2.2) {
+        locked = true;
+        break;
+      }
+    }
+    this.crosshairLocked = locked;
   }
 
   private emitHud(force = false) {
@@ -1281,6 +1328,7 @@ export class VolcanoEngine {
       knifeReady: this.knifeCooldown <= 0,
       knifeChargeProgress:
         1 - this.knifeCooldown / this.knifeCooldownDuration,
+      crosshairLocked: this.crosshairLocked,
       altitude: Math.max(0, Math.round(this.playerPos.y * 10) / 10),
       elapsedSeconds: Math.floor(this.elapsedSeconds),
       damageFlash: this.damageFlash,
@@ -1397,12 +1445,7 @@ export class VolcanoEngine {
     if (this.isDraggingCamera || primaryDragMoved || (e.buttons & 2) !== 0) {
       const dx = e.clientX - this.lastPointerX;
       const dy = e.clientY - this.lastPointerY;
-      this.cameraYaw -= dx * 0.007;
-      this.cameraPitch = THREE.MathUtils.clamp(
-        this.cameraPitch + dy * 0.005,
-        0.16,
-        1.05,
-      );
+      this.rotateCameraBy(dx, dy);
       this.lastPointerX = e.clientX;
       this.lastPointerY = e.clientY;
     }

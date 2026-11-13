@@ -17,6 +17,7 @@ const INITIAL_HUD: HudSnapshot = {
   kills: 0,
   knifeReady: true,
   knifeChargeProgress: 1,
+  crosshairLocked: false,
   altitude: 34,
   elapsedSeconds: 0,
   damageFlash: 0,
@@ -61,8 +62,8 @@ export default function App() {
         onToggleMute={() => engineRef.current?.toggleMute()}
         onJoystickMove={(x, y) => engineRef.current?.setVirtualJoystick(x, y)}
         onJumpChange={(pressed) => engineRef.current?.setVirtualJump(pressed)}
-        onThrowKnife={() => engineRef.current?.triggerThrowKnife()}
-        onCameraTurn={(dir) => engineRef.current?.setVirtualCameraTurn(dir)}
+        onFireChange={(pressed) => engineRef.current?.setVirtualFire(pressed)}
+        onCameraLook={(dx, dy) => engineRef.current?.rotateCameraBy(dx, dy)}
       />
     </main>
   );
