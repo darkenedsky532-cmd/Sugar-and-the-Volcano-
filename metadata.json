@@ -1,0 +1,6 @@
+{
+  "name": "Caldera Ascent",
+  "description": "A 3D volcano survival action game: parachute into an active caldera, wield infinite throwing knives against respawning magma monsters, and forge stairs from every kill to escape.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
